@@ -1,9 +1,8 @@
-use chrono::prelude::*;
 use crossterm::{
     event::{self, Event as CEvent, KeyCode},
     terminal::{disable_raw_mode, enable_raw_mode},
 };
-use rand::{distributions::Alphanumeric, prelude::*};
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
@@ -11,16 +10,9 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 use thiserror::Error;
-use tui::{
-    backend::CrosstermBackend,
-    layout::{Alignment, Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
-    text::{Span, Spans},
-    widgets::{
+use tui::{Terminal, backend::CrosstermBackend, layout::{Alignment, Constraint, Direction, Layout}, style::{Color, Modifier, Style}, text::{Span, Spans}, widgets::{
         Block, BorderType, Borders, Cell, List, ListItem, ListState, Paragraph, Row, Table, Tabs,
-    },
-    Terminal,
-};
+    }};
 
 const DB_PATH: &str = "./data/db.json";
 
@@ -38,25 +30,51 @@ enum Event<I> {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-struct Pet {
-    id: usize,
+struct Group {
     name: String,
-    category: String,
-    age: usize,
-    created_at: DateTime<Utc>,
+    assignment: usize,
+    feedback: Vec<String>,
+    footnote: String,
 }
 
 #[derive(Copy, Clone, Debug)]
 enum MenuItem {
     Home,
-    Pets,
+    Groups,
+    Editing,
+}
+
+enum InputMode {
+    Normal,
+    // Editing,
+}
+
+/// App holds the state of the application
+struct App {
+    /// Current value of the input box
+    input: String,
+    /// Current input mode
+    input_mode: InputMode,
+    /// History of recorded messages
+    messages: Vec<String>,
+}
+
+impl Default for App {
+    fn default() -> App {
+        App {
+            input: String::new(),
+            input_mode: InputMode::Normal,
+            messages: Vec::new(),
+        }
+    }
 }
 
 impl From<MenuItem> for usize {
     fn from(input: MenuItem) -> usize {
         match input {
             MenuItem::Home => 0,
-            MenuItem::Pets => 1,
+            MenuItem::Groups => 1,
+            MenuItem::Editing => 2,
         }
     }
 }
@@ -92,10 +110,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
-    let menu_titles = vec!["Home", "Pets", "Add", "Delete", "Quit"];
+    let menu_titles = vec!["Home", "Groups", "Add", "Delete", "Quit"];
     let mut active_menu_item = MenuItem::Home;
-    let mut pet_list_state = ListState::default();
-    pet_list_state.select(Some(0));
+    let mut group_list_state = ListState::default();
+    group_list_state.select(Some(0));
 
     loop {
         terminal.draw(|rect| {
@@ -113,7 +131,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .split(size);
 
-            let copyright = Paragraph::new("pet-CLI 2020 - all rights reserved")
+            let copyright = Paragraph::new("SAGrading - CLI 2021")
                 .style(Style::default().fg(Color::LightCyan))
                 .alignment(Alignment::Center)
                 .block(
@@ -150,17 +168,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             rect.render_widget(tabs, chunks[0]);
             match active_menu_item {
                 MenuItem::Home => rect.render_widget(render_home(), chunks[1]),
-                MenuItem::Pets => {
-                    let pets_chunks = Layout::default()
+                MenuItem::Groups => {
+                    let groups_chunks = Layout::default()
                         .direction(Direction::Horizontal)
                         .constraints(
                             [Constraint::Percentage(20), Constraint::Percentage(80)].as_ref(),
                         )
                         .split(chunks[1]);
-                    let (left, right) = render_pets(&pet_list_state);
-                    rect.render_stateful_widget(left, pets_chunks[0], &mut pet_list_state);
-                    rect.render_widget(right, pets_chunks[1]);
+                    let (left, right) = render_groups(&group_list_state);
+                    rect.render_stateful_widget(left, groups_chunks[0], &mut group_list_state);
+                    rect.render_widget(right, groups_chunks[1]);
                 }
+                MenuItem::Editing => rect.render_widget(render_home(), chunks[1]),
             }
             rect.render_widget(copyright, chunks[2]);
         })?;
@@ -173,30 +192,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     break;
                 }
                 KeyCode::Char('h') => active_menu_item = MenuItem::Home,
-                KeyCode::Char('p') => active_menu_item = MenuItem::Pets,
+                KeyCode::Char('g') => active_menu_item = MenuItem::Groups,
                 KeyCode::Char('a') => {
-                    add_random_pet_to_db().expect("can add new random pet");
+                    add_random_group_to_db().expect("can add new random group");
                 }
+                KeyCode::Char('e') => active_menu_item = MenuItem::Editing,
                 KeyCode::Char('d') => {
-                    remove_pet_at_index(&mut pet_list_state).expect("can remove pet");
+                    remove_group_at_index(&mut group_list_state).expect("can remove group");
                 }
                 KeyCode::Down => {
-                    if let Some(selected) = pet_list_state.selected() {
-                        let amount_pets = read_db().expect("can fetch pet list").len();
-                        if selected >= amount_pets - 1 {
-                            pet_list_state.select(Some(0));
+                    if let Some(selected) = group_list_state.selected() {
+                        let amount_groups = read_db().expect("can fetch group list").len();
+                        if selected >= amount_groups - 1 {
+                            group_list_state.select(Some(0));
                         } else {
-                            pet_list_state.select(Some(selected + 1));
+                            group_list_state.select(Some(selected + 1));
                         }
                     }
                 }
                 KeyCode::Up => {
-                    if let Some(selected) = pet_list_state.selected() {
-                        let amount_pets = read_db().expect("can fetch pet list").len();
+                    if let Some(selected) = group_list_state.selected() {
+                        let amount_groups = read_db().expect("can fetch group list").len();
                         if selected > 0 {
-                            pet_list_state.select(Some(selected - 1));
+                            group_list_state.select(Some(selected - 1));
                         } else {
-                            pet_list_state.select(Some(amount_pets - 1));
+                            group_list_state.select(Some(amount_groups - 1));
                         }
                     }
                 }
@@ -217,11 +237,18 @@ fn render_home<'a>() -> Paragraph<'a> {
         Spans::from(vec![Span::raw("to")]),
         Spans::from(vec![Span::raw("")]),
         Spans::from(vec![Span::styled(
-            "pet-CLI",
+            "SAGrading-CLI",
             Style::default().fg(Color::LightBlue),
         )]),
         Spans::from(vec![Span::raw("")]),
-        Spans::from(vec![Span::raw("Press 'p' to access pets, 'a' to add random new pets and 'd' to delete the currently selected pet.")]),
+        Spans::from(vec![Span::raw("--------------------------------------------------------------------------------------------------------")]),
+        Spans::from(vec![Span::raw("< Press 'g' to access groups, 'a' to add random new groups and 'd' to delete the currently selected group. >")]),
+        Spans::from(vec![Span::raw("--------------------------------------------------------------------------------------------------------")]),
+        Spans::from(vec![Span::raw("    \\/")]),
+        Spans::from(vec![Span::styled("|\\---/|", Style::default().fg(Color::LightBlue),)]),
+        Spans::from(vec![Span::styled("| o_o |", Style::default().fg(Color::LightBlue),)]),
+        Spans::from(vec![Span::styled(" \\_^_/ ", Style::default().fg(Color::LightBlue),)]),
+
     ])
     .alignment(Alignment::Center)
     .block(
@@ -234,66 +261,56 @@ fn render_home<'a>() -> Paragraph<'a> {
     home
 }
 
-fn render_pets<'a>(pet_list_state: &ListState) -> (List<'a>, Table<'a>) {
-    let pets = Block::default()
+fn render_groups<'a>(group_list_state: &ListState) -> (List<'a>, Table<'a>) {
+    let groups = Block::default()
         .borders(Borders::ALL)
         .style(Style::default().fg(Color::White))
-        .title("Pets")
+        .title("Groups")
         .border_type(BorderType::Plain);
 
-    let pet_list = read_db().expect("can fetch pet list");
-    let items: Vec<_> = pet_list
+    let group_list = read_db().expect("can fetch group list");
+    let items: Vec<_> = group_list
         .iter()
-        .map(|pet| {
+        .map(|group| {
             ListItem::new(Spans::from(vec![Span::styled(
-                pet.name.clone(),
+                group.name.clone(),
                 Style::default(),
             )]))
         })
         .collect();
 
-    let selected_pet = pet_list
+    let selected_group = group_list
         .get(
-            pet_list_state
+            group_list_state
                 .selected()
-                .expect("there is always a selected pet"),
+                .expect("there is always a selected group"),
         )
         .expect("exists")
         .clone();
 
-    let list = List::new(items).block(pets).highlight_style(
+    let list = List::new(items).block(groups).highlight_style(
         Style::default()
             .bg(Color::Yellow)
             .fg(Color::Black)
             .add_modifier(Modifier::BOLD),
     );
 
-    let pet_detail = Table::new(vec![Row::new(vec![
-        Cell::from(Span::raw(selected_pet.id.to_string())),
-        Cell::from(Span::raw(selected_pet.name)),
-        Cell::from(Span::raw(selected_pet.category)),
-        Cell::from(Span::raw(selected_pet.age.to_string())),
-        Cell::from(Span::raw(selected_pet.created_at.to_string())),
+    let group_detail = Table::new(vec![Row::new(vec![
+        Cell::from(Span::raw(selected_group.name.to_string())),
+        Cell::from(Span::raw(selected_group.assignment.to_string())),
+        Cell::from(Span::raw(selected_group.feedback.concat())),
     ])])
     .header(Row::new(vec![
         Cell::from(Span::styled(
-            "ID",
+            "Type",
             Style::default().add_modifier(Modifier::BOLD),
         )),
         Cell::from(Span::styled(
-            "Name",
+            "Assignment",
             Style::default().add_modifier(Modifier::BOLD),
         )),
         Cell::from(Span::styled(
-            "Category",
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Cell::from(Span::styled(
-            "Age",
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Cell::from(Span::styled(
-            "Created At",
+            "Feedback",
             Style::default().add_modifier(Modifier::BOLD),
         )),
     ]))
@@ -305,51 +322,48 @@ fn render_pets<'a>(pet_list_state: &ListState) -> (List<'a>, Table<'a>) {
             .border_type(BorderType::Plain),
     )
     .widths(&[
-        Constraint::Percentage(5),
+        Constraint::Percentage(10),
         Constraint::Percentage(20),
-        Constraint::Percentage(20),
-        Constraint::Percentage(5),
-        Constraint::Percentage(20),
+        Constraint::Percentage(100),
     ]);
 
-    (list, pet_detail)
+    (list, group_detail)
 }
 
-fn read_db() -> Result<Vec<Pet>, Error> {
+fn read_db() -> Result<Vec<Group>, Error> {
     let db_content = fs::read_to_string(DB_PATH)?;
-    let parsed: Vec<Pet> = serde_json::from_str(&db_content)?;
+    let parsed: Vec<Group> = serde_json::from_str(&db_content)?;
     Ok(parsed)
 }
 
-fn add_random_pet_to_db() -> Result<Vec<Pet>, Error> {
+fn add_random_group_to_db() -> Result<Vec<Group>, Error> {
     let mut rng = rand::thread_rng();
     let db_content = fs::read_to_string(DB_PATH)?;
-    let mut parsed: Vec<Pet> = serde_json::from_str(&db_content)?;
-    let catsdogs = match rng.gen_range(0, 1) {
-        0 => "cats",
-        _ => "dogs",
+    let mut parsed: Vec<Group> = serde_json::from_str(&db_content)?;
+    let mut textvector = Vec::new();
+    let bottomtext = "This assignment was graded by: Tom Koning. E-mail: tom.koning@ru.nl.";
+    textvector.push("feedback".to_string());
+
+    let random_group = Group {
+        name: format!("Group {}", rng.gen_range(0, 10).to_string()),
+        assignment: rng.gen_range(0,10),
+        feedback: textvector,
+        footnote: bottomtext.to_string(),
     };
 
-    let random_pet = Pet {
-        id: rng.gen_range(0, 9999999),
-        name: rng.sample_iter(Alphanumeric).take(10).collect(),
-        category: catsdogs.to_owned(),
-        age: rng.gen_range(1, 15),
-        created_at: Utc::now(),
-    };
 
-    parsed.push(random_pet);
+    parsed.push(random_group);
     fs::write(DB_PATH, &serde_json::to_vec(&parsed)?)?;
     Ok(parsed)
 }
 
-fn remove_pet_at_index(pet_list_state: &mut ListState) -> Result<(), Error> {
-    if let Some(selected) = pet_list_state.selected() {
+fn remove_group_at_index(group_list_state: &mut ListState) -> Result<(), Error> {
+    if let Some(selected) = group_list_state.selected() {
         let db_content = fs::read_to_string(DB_PATH)?;
-        let mut parsed: Vec<Pet> = serde_json::from_str(&db_content)?;
+        let mut parsed: Vec<Group> = serde_json::from_str(&db_content)?;
         parsed.remove(selected);
         fs::write(DB_PATH, &serde_json::to_vec(&parsed)?)?;
-        pet_list_state.select(Some(selected - 1));
+        group_list_state.select(Some(selected - 1));
     }
     Ok(())
 }

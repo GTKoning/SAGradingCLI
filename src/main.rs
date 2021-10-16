@@ -368,9 +368,13 @@ fn remove_group_at_index(group_list_state: &mut ListState) -> Result<(), Error> 
     if let Some(selected) = group_list_state.selected() {
         let db_content = fs::read_to_string(DB_PATH)?;
         let mut parsed: Vec<Group> = serde_json::from_str(&db_content)?;
-        parsed.remove(selected);
-        fs::write(DB_PATH, &serde_json::to_vec(&parsed)?)?;
-        group_list_state.select(Some(selected - 1));
+        if parsed.len() != 1 {
+            parsed.remove(selected);
+            fs::write(DB_PATH, &serde_json::to_vec(&parsed)?)?;
+            if selected != 0 {
+                group_list_state.select(Some(selected - 1));
+            }
+        }
     }
     Ok(())
 }

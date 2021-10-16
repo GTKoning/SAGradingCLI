@@ -10,9 +10,16 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 use thiserror::Error;
-use tui::{Terminal, backend::CrosstermBackend, layout::{Alignment, Constraint, Direction, Layout}, style::{Color, Modifier, Style}, text::{Span, Spans}, widgets::{
+use tui::{
+    backend::CrosstermBackend,
+    layout::{Alignment, Constraint, Direction, Layout},
+    style::{Color, Modifier, Style},
+    text::{Span, Spans},
+    widgets::{
         Block, BorderType, Borders, Cell, List, ListItem, ListState, Paragraph, Row, Table, Tabs,
-    }};
+    },
+    Terminal,
+};
 
 const DB_PATH: &str = "./data/db.json";
 
@@ -189,6 +196,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 KeyCode::Char('q') => {
                     disable_raw_mode()?;
                     terminal.show_cursor()?;
+                    terminal.clear()?;
                     break;
                 }
                 KeyCode::Char('h') => active_menu_item = MenuItem::Home,
@@ -346,11 +354,10 @@ fn add_random_group_to_db() -> Result<Vec<Group>, Error> {
 
     let random_group = Group {
         name: format!("Group {}", rng.gen_range(0, 10).to_string()),
-        assignment: rng.gen_range(0,10),
+        assignment: rng.gen_range(0, 10),
         feedback: textvector,
         footnote: bottomtext.to_string(),
     };
-
 
     parsed.push(random_group);
     fs::write(DB_PATH, &serde_json::to_vec(&parsed)?)?;

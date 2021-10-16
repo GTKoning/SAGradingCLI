@@ -50,31 +50,7 @@ enum MenuItem {
     Groups,
     Editing,
 }
-
-enum InputMode {
-    Normal,
-    // Editing,
-}
-
 /// App holds the state of the application
-struct App {
-    /// Current value of the input box
-    input: String,
-    /// Current input mode
-    input_mode: InputMode,
-    /// History of recorded messages
-    messages: Vec<String>,
-}
-
-impl Default for App {
-    fn default() -> App {
-        App {
-            input: String::new(),
-            input_mode: InputMode::Normal,
-            messages: Vec::new(),
-        }
-    }
-}
 
 impl From<MenuItem> for usize {
     fn from(input: MenuItem) -> usize {

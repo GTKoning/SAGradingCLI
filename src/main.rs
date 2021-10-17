@@ -2,6 +2,7 @@ use crossterm::{
     event::{self, Event as CEvent, KeyCode},
     terminal::{disable_raw_mode, enable_raw_mode},
 };
+use log::{Level, Metadata, Record};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::fs;
